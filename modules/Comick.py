@@ -1,16 +1,58 @@
+import google_colab_selenium as gs
+from selenium.webdriver.chrome.options import Options
+from random import choice
+import time
 import json
 from bs4 import BeautifulSoup
-from utils.models import Manga
+from utils.models import Manga  # Ensure you have the correct import path for your Manga model
 
+# User-Agent rotation
+user_agents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
+    'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; AS; rv:11.0) like Gecko',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.1 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.96 Safari/537.36'
+]
+
+# Function to set up Selenium in Google Colab
+def setup_selenium():
+    options = Options()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--incognito")
+    options.add_argument(f'--user-agent={choice(user_agents)}')
+    driver = gs.Chrome(options=options)
+    return driver
+
+# Function to fetch page content using Selenium
+def get_page_content(url, driver, request_interval=2, page_load_delay=2):
+    driver.get(url)
+    time.sleep(request_interval)
+    html_content = driver.page_source
+    time.sleep(page_load_delay)
+    return html_content
+
+# Comick class using Selenium for scraping
 class Comick(Manga):
     domain = 'comick.io'
     logo = 'https://comick.io/static/icons/unicorn-256_maskable.png'
     headers = {'Referer': 'https://comick.io/'}
     download_images_headers = headers
 
+    @staticmethod
     def get_info(manga):
-        response, _ = Comick.send_request(f'https://comick.io/comic/{manga}', headers=Comick.headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        driver = setup_selenium()  # Initialize the Selenium driver
+        url = f'https://comick.io/comic/{manga}'
+        html_content = get_page_content(url, driver)  # Get page content via Selenium
+        driver.quit()
+        
+        soup = BeautifulSoup(html_content, 'html.parser')
         data = json.loads(soup.find('script', {'id': '__NEXT_DATA__'}).get_text(strip=True))['props']['pageProps']
         extras = {item['md_genres']['group']: [d['md_genres']['name'] for d in data['comic']['md_comic_md_genres'] if d.get('md_genres', {}).get('group') == item['md_genres']['group']] for item in data['comic']['md_comic_md_genres']}
         extras['Artinsts'] = [ti['name'] for ti in data['artists']]
@@ -29,10 +71,14 @@ class Comick(Manga):
             'Extras': extras
         }
 
+    @staticmethod
     def get_chapters(manga):
-        response, session = Comick.send_request(f'https://comick.io/comic/{manga}', headers=Comick.headers)
-        session.headers = Comick.headers
-        soup = BeautifulSoup(response.text, 'html.parser')
+        driver = setup_selenium()  # Initialize the Selenium driver
+        url = f'https://comick.io/comic/{manga}'
+        html_content = get_page_content(url, driver)  # Get page content via Selenium
+        driver.quit()
+        
+        soup = BeautifulSoup(html_content, 'html.parser')
         script = soup.find('script', {'id': '__NEXT_DATA__'})
         hid = json.loads(script.get_text(strip=True))['props']['pageProps']['comic']['hid']
         chapters_urls = []
@@ -50,20 +96,29 @@ class Comick(Manga):
         } for chapter_url in chapters_urls]
         return chapters
 
+    @staticmethod
     def get_images(manga, chapter):
-        response, _ = Comick.send_request(f'https://comick.io/comic/{manga}/{chapter["url"]}', headers=Comick.headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        driver = setup_selenium()  # Initialize the Selenium driver
+        url = f'https://comick.io/comic/{manga}/{chapter["url"]}'
+        html_content = get_page_content(url, driver)  # Get page content via Selenium
+        driver.quit()
+        
+        soup = BeautifulSoup(html_content, 'html.parser')
         script = soup.find('script', {'id': '__NEXT_DATA__'})
         images = json.loads(script.get_text(strip=True))['props']['pageProps']['chapter']['md_images']
         images = [f'https://meo3.comick.pictures/{image["b2key"]}' for image in images]
         save_names = [f'{i+1:03d}.{images[i].split(".")[-1]}' for i in range(len(images))]
         return images, save_names
 
+    @staticmethod
     def search_by_keyword(keyword, absolute):
         from requests.exceptions import HTTPError
-        response, session = Comick.send_request(f'https://comick.io/search', headers=Comick.headers)
-        session.headers = Comick.headers
-        soup = BeautifulSoup(response.text, 'html.parser')
+        driver = setup_selenium()  # Initialize the Selenium driver
+        url = f'https://comick.io/search'
+        html_content = get_page_content(url, driver)  # Get page content via Selenium
+        driver.quit()
+
+        soup = BeautifulSoup(html_content, 'html.parser')
         script = soup.find('script', {'id': '__NEXT_DATA__'}).get_text(strip=True)
         genres = {genre['id']: genre['name'] for genre in json.loads(script)['props']['pageProps']['genres']}
         page = 1
@@ -88,9 +143,11 @@ class Comick(Manga):
             yield results
             page += 1
 
+    @staticmethod
     def get_db():
         return Comick.search_by_keyword('', False)
 
+    @staticmethod
     def rename_chapter(chapter):
         chapter = chapter.split('-', 1)[1]
         new_name = ''
